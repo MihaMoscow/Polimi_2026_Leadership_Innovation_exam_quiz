@@ -38,6 +38,9 @@
   .subtitle-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
   .subtitle-row .subtitle { margin-bottom: 0; }
   .clear-all-btn { font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 7px; padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+  .picker-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .export-all-btn { color: var(--accent-dark); border-color: var(--accent); }
+  .export-all-btn:hover { background: var(--green-bg); border-color: var(--green-border); color: var(--green); }
   .clear-all-btn:hover { color: var(--red); border-color: var(--red-border); background: var(--red-bg); }
   .app-footer { max-width: 900px; margin: 40px auto 0; padding: 16px 24px 0; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--muted); }
   .app-footer a { color: var(--muted); text-decoration: underline; }
@@ -147,7 +150,10 @@
       <div class="subtitle">Pick an exam. Answer, write your reasoning, then check. Progress is saved in this browser.
         <span id="globalScore"></span>
       </div>
-      <button class="clear-all-btn" onclick="clearAllProgress()">Clear all progress</button>
+      <div class="picker-actions">
+        <button class="clear-all-btn export-all-btn" onclick="exportAllAnswers()">Export all answers</button>
+        <button class="clear-all-btn" onclick="clearAllProgress()">Clear all progress</button>
+      </div>
     </div>
     <div id="examList"></div>
   </div>
@@ -552,6 +558,82 @@ function exportExam() {
   const a = document.createElement('a');
   a.href = url;
   a.download = `${exam.id}_my_answers.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportAllAnswers() {
+  const cap = s => s.charAt(0) + s.slice(1).toLowerCase();
+  let attempted = 0, gradableChecked = 0, totalCorrect = 0;
+  const topicStats = {};
+  const examBlocks = [];
+  const wrongList = [];
+
+  QUIZ_DATA.forEach(exam => {
+    const rows = [];
+    let examChecked = 0, examCorrect = 0, examGradable = 0;
+    let examTouched = false;
+    exam.questions.forEach(q => {
+      const rec = progress[answerKey(exam.id, q.qnum)] || {};
+      if (rec.selected) { attempted++; examTouched = true; }
+      const gradable = q.confidence === 'confirmed';
+      if (gradable) examGradable++;
+      let mark = '·', outcome = 'not answered';
+      if (rec.selected && gradable && rec.checked) {
+        gradableChecked++; examChecked++;
+        topicStats[exam.subject] = topicStats[exam.subject] || { correct: 0, total: 0 };
+        topicStats[exam.subject].total++;
+        if (rec.selected === q.correct) {
+          mark = '✓'; outcome = 'correct'; totalCorrect++; examCorrect++;
+          topicStats[exam.subject].correct++;
+        } else {
+          mark = '✗'; outcome = `WRONG (you: ${rec.selected}, correct: ${q.correct})`;
+          wrongList.push(`${exam.year} ${exam.call} ${cap(exam.subject)} Q${q.qnum} — you: ${rec.selected}, correct: ${q.correct}`);
+        }
+      } else if (rec.selected && !rec.checked) {
+        outcome = `answered ${rec.selected}, not checked`;
+      } else if (rec.selected && !gradable) {
+        outcome = `answered ${rec.selected} (no key)`;
+      }
+      const note = rec.justification ? ` — note: ${rec.justification.replace(/\s+/g, ' ').trim()}` : '';
+      rows.push(`- Q${q.qnum} [${mark}] ${outcome}${note}`);
+    });
+    if (examTouched) {
+      const score = examChecked ? ` — score ${examCorrect}/${examChecked} checked (of ${examGradable} gradable)` : '';
+      examBlocks.push(`### ${exam.year} — ${exam.call} call — ${cap(exam.subject)}${score}\n${rows.join('\n')}`);
+    }
+  });
+
+  if (attempted === 0) {
+    alert('No answers recorded yet — answer and check some questions first, then export.');
+    return;
+  }
+
+  const lines = [];
+  lines.push('# L&I Quiz — My Answers Export');
+  lines.push(`_Generated ${new Date().toISOString().slice(0, 10)}. Upload this to Claude to refine weak topics._`);
+  lines.push('');
+  lines.push('## Summary');
+  lines.push(`- Questions attempted: ${attempted} / 150`);
+  lines.push(`- Gradable answers checked: ${gradableChecked}`);
+  lines.push(`- Correct: ${totalCorrect} / ${gradableChecked}${gradableChecked ? ` (${Math.round(100 * totalCorrect / gradableChecked)}%)` : ''}`);
+  lines.push('');
+  lines.push('## Score by subject');
+  const subjs = Object.keys(topicStats).sort();
+  lines.push(subjs.length ? subjs.map(s => `- ${cap(s)}: ${topicStats[s].correct}/${topicStats[s].total} (${Math.round(100 * topicStats[s].correct / topicStats[s].total)}%)`).join('\n') : '- (nothing checked yet)');
+  lines.push('');
+  lines.push('## Questions answered incorrectly');
+  lines.push(wrongList.length ? wrongList.map(w => `- ${w}`).join('\n') : '- (none yet)');
+  lines.push('');
+  lines.push('## Full breakdown by exam');
+  lines.push(examBlocks.join('\n\n'));
+  lines.push('');
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `LI_quiz_my_answers_${new Date().toISOString().slice(0, 10)}.md`;
   a.click();
   URL.revokeObjectURL(url);
 }
