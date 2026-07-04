@@ -95,6 +95,22 @@
   .footer-note { font-size: 12px; color: var(--muted); margin-top: 30px; }
   .score-pill { font-size: 12.5px; color: var(--muted); }
   .inferred-note { margin-top: 10px; padding: 8px 12px; background: var(--amber-bg); border: 1px solid var(--amber-border); border-radius: 8px; font-size: 12px; color: var(--amber); }
+  #nextBtn.finish { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .results-title { margin: 0 0 4px; font-size: 18px; }
+  .results-score { font-size: 15px; color: var(--muted); margin-bottom: 14px; }
+  .results-score strong { color: var(--text); font-size: 17px; }
+  .results-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+  .result-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 13.5px; background: var(--panel); }
+  .result-row .r-icon { width: 20px; text-align: center; font-weight: 700; }
+  .result-row.r-correct { background: var(--green-bg); border-color: var(--green-border); }
+  .result-row.r-correct .r-icon { color: var(--green); }
+  .result-row.r-wrong { background: var(--red-bg); border-color: var(--red-border); }
+  .result-row.r-wrong .r-icon { color: var(--red); }
+  .result-row .r-detail { color: var(--muted); margin-left: auto; }
+  .results-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  @media (max-width: 480px) {
+    .results-actions button { flex: 1 1 auto; }
+  }
 
   /* Mobile adjustments */
   @media (max-width: 480px) {
@@ -152,9 +168,19 @@
       </div>
       <div id="verdictBox"></div>
     </div>
-    <div class="nav-row">
+    <div class="nav-row" id="navRow">
       <button class="secondary" onclick="prevQuestion()">&larr; Previous</button>
-      <button class="secondary" onclick="nextQuestion()">Next &rarr;</button>
+      <button class="secondary" id="nextBtn" onclick="nextQuestion()">Next &rarr;</button>
+    </div>
+    <div class="card" id="resultsView" style="display:none;">
+      <h3 class="results-title">Exam finished</h3>
+      <div class="results-score" id="resultsScore"></div>
+      <div class="results-rows" id="resultsRows"></div>
+      <div class="results-actions">
+        <button class="secondary" onclick="showPicker()">&larr; All exams</button>
+        <button class="secondary" onclick="reviewExam()">Review answers</button>
+        <button class="primary" id="nextExamBtn" onclick="goNextExam()"></button>
+      </div>
     </div>
     <div class="footer-note">Answer key was extracted automatically from each exam's justification text. Questions marked "no confirmed answer key" don't assert right/wrong — compare your reasoning to the justification shown instead.</div>
   </div>
@@ -297,6 +323,17 @@ function renderDots() {
 }
 
 function renderQuestion() {
+  document.getElementById('resultsView').style.display = 'none';
+  document.querySelector('#quizView .card').style.display = 'block';
+  document.getElementById('navRow').style.display = 'flex';
+  const nextBtn = document.getElementById('nextBtn');
+  if (currentQIndex === currentExam.questions.length - 1) {
+    nextBtn.innerHTML = 'Finish exam ✓';
+    nextBtn.classList.add('finish');
+  } else {
+    nextBtn.innerHTML = 'Next &rarr;';
+    nextBtn.classList.remove('finish');
+  }
   const exam = currentExam;
   const q = exam.questions[currentQIndex];
   document.getElementById('examTitle').textContent = `A.Y. ${exam.year} — ${exam.call} call — ${exam.subject.charAt(0) + exam.subject.slice(1).toLowerCase()} — Q${q.qnum}`;
@@ -385,6 +422,92 @@ function prevQuestion() {
 }
 function nextQuestion() {
   if (currentQIndex < currentExam.questions.length - 1) { currentQIndex++; renderQuestion(); }
+  else { finishExam(); }
+}
+
+function nextExamOf(exam) {
+  const idx = QUIZ_DATA.findIndex(e => e.id === exam.id);
+  return idx >= 0 && idx < QUIZ_DATA.length - 1 ? QUIZ_DATA[idx + 1] : null;
+}
+
+function examLabel(exam) {
+  return `A.Y. ${exam.year} — ${exam.call} call — ${exam.subject.charAt(0) + exam.subject.slice(1).toLowerCase()}`;
+}
+
+function finishExam() {
+  const exam = currentExam;
+  const stats = examStats(exam);
+  const unanswered = stats.total - stats.answered;
+  const unchecked = stats.answered - stats.checked;
+  if (unanswered > 0 || unchecked > 0) {
+    const parts = [];
+    if (unanswered > 0) parts.push(`${unanswered} question${unanswered > 1 ? 's' : ''} not answered`);
+    if (unchecked > 0) parts.push(`${unchecked} answered but not checked`);
+    if (!confirm(`You still have ${parts.join(' and ')}. Finish anyway?`)) return;
+  }
+  renderResults();
+}
+
+function renderResults() {
+  const exam = currentExam;
+  const stats = examStats(exam);
+  document.querySelector('#quizView .card').style.display = 'none';
+  document.getElementById('navRow').style.display = 'none';
+  document.getElementById('resultsView').style.display = 'block';
+  document.getElementById('examTitle').textContent = examLabel(exam) + ' — Results';
+  renderDots();
+
+  let scoreHtml = '';
+  if (stats.gradable > 0) {
+    scoreHtml = `<strong>${stats.correct}/${stats.gradable}</strong> correct`;
+    const ungradable = stats.total - stats.gradable;
+    if (ungradable > 0) scoreHtml += ` · ${ungradable} question${ungradable > 1 ? 's' : ''} without a confirmed key (not graded)`;
+  } else {
+    scoreHtml = `${stats.answered}/${stats.total} answered — no answer key exists for this call, so nothing was graded`;
+  }
+  document.getElementById('resultsScore').innerHTML = scoreHtml;
+
+  const rowsEl = document.getElementById('resultsRows');
+  rowsEl.innerHTML = '';
+  exam.questions.forEach((q, idx) => {
+    const rec = progress[answerKey(exam.id, q.qnum)] || {};
+    let cls = 'result-row', icon = '–', detail = '';
+    if (!rec.selected) {
+      detail = 'not answered';
+    } else if (q.confidence === 'confirmed' && rec.checked) {
+      if (rec.selected === q.correct) { cls += ' r-correct'; icon = '✓'; detail = `your answer: ${rec.selected}`; }
+      else { cls += ' r-wrong'; icon = '✗'; detail = `you: ${rec.selected} · correct: ${q.correct}`; }
+    } else if (rec.selected && !rec.checked) {
+      detail = `answered ${rec.selected}, not checked`;
+    } else {
+      detail = `your answer: ${rec.selected} (no key to grade)`;
+    }
+    const row = document.createElement('div');
+    row.className = cls;
+    row.innerHTML = `<span class="r-icon">${icon}</span><span>Question ${q.qnum}</span><span class="r-detail">${detail}</span>`;
+    row.onclick = () => { currentQIndex = idx; renderQuestion(); };
+    rowsEl.appendChild(row);
+  });
+
+  const nxt = nextExamOf(exam);
+  const nextBtnEl = document.getElementById('nextExamBtn');
+  if (nxt) {
+    nextBtnEl.style.display = 'inline-block';
+    const yearPrefix = nxt.year !== exam.year ? `A.Y. ${nxt.year} — ` : '';
+    nextBtnEl.textContent = `Next: ${yearPrefix}${nxt.call} call — ${nxt.subject.charAt(0) + nxt.subject.slice(1).toLowerCase()} →`;
+  } else {
+    nextBtnEl.style.display = 'none';
+  }
+}
+
+function reviewExam() {
+  currentQIndex = 0;
+  renderQuestion();
+}
+
+function goNextExam() {
+  const nxt = nextExamOf(currentExam);
+  if (nxt) openExam(nxt.id);
 }
 
 function stripHtml(html) {
